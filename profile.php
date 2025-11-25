@@ -203,13 +203,13 @@ if (isset($_FILES['profile_picture']) && $_FILES['profile_picture']['error'] == 
                 <input type="text" name="username" value="<?php echo $username ?>" disabled>
 
                 <label for="name">Name:</label>
-                <input type="text" name="name" value="<?php echo $name ?>" required>
+                <input type="text" name="name" value="<?php echo htmlspecialchars($name, ENT_QUOTES, 'UTF-8'); ?>" required>
 
                 <label for="email">Email:</label>
-                <input type="email" name="email" value="<?php echo $email ?>" required>
+                <input type="email" name="email" value="<?php echo htmlspecialchars($email, ENT_QUOTES, 'UTF-8'); ?>" required>
 
                 <label for="address">Address:</label>
-                <textarea name="address" required><?php echo $address ?></textarea>
+                <textarea name="address" required><?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?></textarea>
 
                 <label for="profile_picture">Profile Picture:</label>
                 <input type="file" name="profile_picture" accept="image/*">
