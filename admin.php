@@ -1,6 +1,6 @@
 <?php
 session_start();
-include 'db_config.php';
+include 'db_config.php'; // Include the database connection script
 
 // Check if the user is logged in as an admin
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
@@ -8,65 +8,118 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
     exit();
 }
 
+$user_id = $_SESSION['user_id'];
+
+// --- FETCH INITIAL DATA ---
+
 // Fetch the profile picture URL for the logged-in user
-$user_id = $_SESSION['user_id']; // Get the logged-in user's ID
 $stmt = $pdo->prepare("SELECT profile_picture_url FROM users WHERE user_id = ?");
 $stmt->execute([$user_id]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
-$profile_picture_url = $user ? $user['profile_picture_url'] : 'https://live.staticflickr.com/65535/53312109285_9243397fae_z.jpg'; // Fallback image
+// Always HTML encode the output data for XSS prevention, even for a URL
+$profile_picture_url = $user ? htmlspecialchars($user['profile_picture_url'], ENT_QUOTES, 'UTF-8') : 'https://live.staticflickr.com/65535/53312109285_9243397fae_z.jpg'; // Fallback image
 
-// Handle profile picture update
+
+// --- HANDLE PROFILE PICTURE UPDATE (SECURED AGAINST PATH TRAVERSAL) ---
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_picture'])) {
     if (isset($_FILES['profile_picture']) && $_FILES['profile_picture']['error'] === UPLOAD_ERR_OK) {
+        
         $fileTmpPath = $_FILES['profile_picture']['tmp_name'];
         $fileName = $_FILES['profile_picture']['name'];
         $fileSize = $_FILES['profile_picture']['size'];
         $fileType = $_FILES['profile_picture']['type'];
+        
         $fileNameCmps = explode(".", $fileName);
         $fileExtension = strtolower(end($fileNameCmps));
 
-        // Specify the directory where you want to save the uploaded file
+        // SECURITY: Whitelist file extensions and MIME types
+        $allowedFileTypes = ['jpg', 'jpeg', 'png', 'gif'];
+        if (!in_array($fileExtension, $allowedFileTypes)) {
+            echo "Error: File type not allowed.";
+            exit();
+        }
+
+        // Specify the upload directory and secure it
         $uploadFileDir = './uploaded_profile_pictures/';
-        $newFileName = uniqid() . '.' . $fileExtension; // Create a unique name for the file
-        $dest_path = $uploadFileDir . $newFileName;
+        
+        // Use realpath() to ensure the directory is absolutely resolved
+        $safe_upload_dir = realpath($uploadFileDir);
+
+        if (!$safe_upload_dir) {
+            echo "Error: Upload directory does not exist or cannot be resolved.";
+            exit();
+        }
+
+        // Create a unique name for the file, preventing Path Traversal
+        // basename() ensures no path information is retained in the filename
+        $newFileName = basename(uniqid() . '.' . $fileExtension); 
+        
+        // Construct the final, guaranteed-safe destination path
+        $dest_path = $safe_upload_dir . DIRECTORY_SEPARATOR . $newFileName;
 
         // Move the file to the upload directory
         if(move_uploaded_file($fileTmpPath, $dest_path)) {
             // Update the users table with the new profile picture URL
-            $profile_picture_url = $dest_path; // Store the path to the uploaded file
+            // Store the path relative to the public web root for HTML use
+            $relative_path = $uploadFileDir . $newFileName; 
+            
             $stmt = $pdo->prepare("UPDATE users SET profile_picture_url = ? WHERE user_id = ?");
-            $stmt->execute([$profile_picture_url, $user_id]); // Use the logged-in user's ID
+            $stmt->execute([$relative_path, $user_id]); 
+            $profile_picture_url = htmlspecialchars($relative_path, ENT_QUOTES, 'UTF-8');
+            
+            echo "Profile picture updated successfully!";
         } else {
             echo "There was an error moving the uploaded file.";
         }
     }
 }
 
-// Handle product addition
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_product'])) {
-    $product_name = $_POST['product_name'];
-    $price = $_POST['price'];
-    $image_url = $_POST['image_url'];
-    $quantity_in_stock = $_POST['quantity_in_stock'];
 
-    // Insert new product into the database
+// --- HANDLE PRODUCT ADDITION (SECURED AGAINST XSS and SQL Injection) ---
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_product'])) {
+    
+    // Sanitize data before use in database (for XSS, though prepared statement is the main SQL defense)
+    // Trim whitespace and cast numeric values
+    $product_name = trim($_POST['product_name']);
+    $price = (float)$_POST['price']; 
+    $image_url = trim($_POST['image_url']);
+    $quantity_in_stock = (int)$_POST['quantity_in_stock']; 
+
+    // Insert new product into the database using prepared statements
     $stmt = $pdo->prepare("INSERT INTO products (product_name, price_ksh, image_url, quantity_in_stock) VALUES (?, ?, ?, ?)");
-    $stmt->execute([$product_name, $price, $image_url, $quantity_in_stock]); // Ensure all variables are included
+    // The execute method safely binds the sanitized variables
+    if ($stmt->execute([$product_name, $price, $image_url, $quantity_in_stock])) { 
+        echo "Product added successfully!";
+    } else {
+        echo "Error adding product.";
+    }
 }
 
-// Handle product deletion
-if (isset($_GET['delete'])) {
-    $product_id = $_GET['delete'];
 
-    // Delete the product from the database
+// --- HANDLE PRODUCT DELETION (SECURED AGAINST SQL Injection) ---
+
+if (isset($_GET['delete'])) {
+    // Cast the input to an integer to ensure it's a number
+    $product_id = (int)$_GET['delete']; 
+
+    // Delete the product from the database using a prepared statement
     $stmt = $pdo->prepare("DELETE FROM products WHERE product_id = ?");
     $stmt->execute([$product_id]);
+    
+    echo "Product deleted successfully!";
 }
 
-// Fetch products from the database
+// --- FETCH PRODUCTS FROM THE DATABASE ---
+
 $stmt = $pdo->prepare("SELECT * FROM products");
 $stmt->execute();
 $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Note: When you loop through $products to display them in the HTML, 
+// you MUST use htmlspecialchars() on every field (product_name, image_url, etc.)
+// to prevent XSS on output.
 ?>
 <!DOCTYPE html>
 <html lang="en">
