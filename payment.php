@@ -17,13 +17,14 @@ if (!isset($_SESSION['user_id'])) {
 // Get the user's cart total amount
 $user_id = $_SESSION['user_id'];
 $stmt = $pdo->prepare("SELECT SUM(p.price_ksh * uc.quantity) AS total_amount
-                    FROM user_cart uc
-                    JOIN products p ON uc.product_id = p.product_id
-                    WHERE uc.user_id = ?");
+                     FROM user_cart uc
+                     JOIN products p ON uc.product_id = p.product_id
+                     WHERE uc.user_id = ?");
 $stmt->execute([$user_id]);
 $cart_total = $stmt->fetchColumn();
 
 if ($cart_total <= 0) {
+    // SECURITY: Ensure static output is safe
     echo "Your cart is empty. Please add items to your cart before proceeding to payment.";
     exit();
 }
@@ -31,7 +32,10 @@ if ($cart_total <= 0) {
 // Process payment
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $amount = $cart_total; // Total amount from the cart
-    $phone_number = $_POST['phone_number']; // User's phone number
+    
+    // SECURITY: Sanitize phone number input (though it's not being outputted here, it's good practice)
+    // We only sanitize before outputting or using it in a non-parameterized SQL query.
+    $phone_number = filter_var($_POST['phone_number'], FILTER_SANITIZE_NUMBER_INT); 
 
     // Generate the token for M-Pesa API
     $token_url = 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials';
@@ -43,8 +47,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     curl_close($ch);
 
     $json_response = json_decode($response);
-    $access_token = $json_response->access_token;
+    // SECURITY: Validate existence before accessing property
+    $access_token = isset($json_response->access_token) ? $json_response->access_token : null;
 
+    if (!$access_token) {
+        echo "Error: Could not retrieve M-Pesa access token.";
+        exit();
+    }
+    
     // Prepare the payment request
     $headers = [
         'Content-Type: application/json',
@@ -53,7 +63,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $payload = [
         'BusinessShortCode' => $BusinessShortcode,
-        'Password' => base64_encode($BusinessShortcode . $lipa_na_mpesa_online_url . time()), // Correct Password generation
+        // SECURITY: Correct Password generation method
+        'Password' => base64_encode($BusinessShortcode . 'bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919' . date('YmdHis')), // Use the actual Safaricom timestamp or a known correct timestamp string
         'Timestamp' => date('YmdHis'),
         'TransactionType' => 'CustomerPayBillOnline',
         'Amount' => $amount,
@@ -80,12 +91,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Check the response from M-Pesa
     if (isset($payment_response_data->ResponseCode) && $payment_response_data->ResponseCode == '0') {
         // Payment was successful
+        
+        // SECURITY FIX: HTML encode the remote data before outputting (XSS Prevention)
+        $transaction_id = htmlspecialchars($payment_response_data->CheckoutRequestID, ENT_QUOTES, 'UTF-8');
+        
         // Update order status in the database
         // You should also save the transaction details for future reference
-        echo "Payment successful! Transaction ID: " . $payment_response_data->CheckoutRequestID;
+        echo "Payment successful! Transaction ID: " . $transaction_id;
+        
     } else {
         // Payment failed
-        echo "Payment failed: " . $payment_response_data->ResponseDescription;
+        
+        // SECURITY FIX: HTML encode the remote data before outputting (XSS Prevention)
+        // Set a default safe message if the description is missing or null
+        $response_description = isset($payment_response_data->ResponseDescription) 
+            ? htmlspecialchars($payment_response_data->ResponseDescription, ENT_QUOTES, 'UTF-8') 
+            : 'Unknown error occurred.';
+            
+        echo "Payment failed: " . $response_description;
     }
 }
 ?>
