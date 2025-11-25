@@ -8,19 +8,34 @@ if (!isset($_SESSION['user_id'])) {
     exit();
 }
 
+// --- SANITIZE USER INPUT FOR SECURITY ---
+
 $user_id = $_SESSION['user_id'];
 
 // Handle filtering
+// Already safe: will be used as a parameter in prepared statement
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 
-// Handle sorting
+// Handle sorting - CRITICAL WHITELISTING FOR SQL INJECTION PREVENTION
+$allowed_sort_columns = ['order_date', 'total_amount', 'status', 'product_name'];
 $sort_by = isset($_GET['sort']) ? $_GET['sort'] : 'order_date';
-$order = isset($_GET['order']) && $_GET['order'] === 'desc' ? 'DESC' : 'ASC';
+
+// 1. Validate the column name (Whitelist Check)
+if (!in_array($sort_by, $allowed_sort_columns)) {
+    $sort_by = 'order_date'; // Default to a safe column
+}
+
+// 2. Validate the order direction (Whitelist Check)
+$order = isset($_GET['order']) && strtoupper($_GET['order']) === 'DESC' ? 'DESC' : 'ASC';
 
 // Handle pagination
+// 3. Ensure pagination variables are integers (Defense-in-Depth)
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-$limit = 10; // Number of orders per page
+$limit = 10; // Number of orders per page (keep this hardcoded if possible)
 $offset = ($page - 1) * $limit;
+
+
+// --- PREPARE SQL QUERIES ---
 
 // Prepare the SQL query with filtering and sorting
 $sql = "SELECT o.*, p.product_name AS product_name 
@@ -30,11 +45,13 @@ $sql = "SELECT o.*, p.product_name AS product_name
 $params = [$user_id];
 
 if ($status_filter) {
+    // Already safe: parameter added to $params array
     $sql .= " AND o.status = ?";
     $params[] = $status_filter;
 }
 
-// Add sorting
+// Add sorting and pagination using the SECURELY VALIDATED variables
+// Now safe because $sort_by and $order are guaranteed to be from the allowed lists
 $sql .= " ORDER BY $sort_by $order LIMIT $limit OFFSET $offset";
 
 try {
@@ -50,12 +67,15 @@ try {
     } else {
         $countParams = [$user_id];
     }
+    
     $countStmt = $pdo->prepare($countSql);
     $countStmt->execute($countParams);
     $total_orders = $countStmt->fetchColumn();
     $total_pages = ceil($total_orders / $limit);
 } catch (PDOException $e) {
-    echo "Database query failed: " . $e->getMessage();
+    // Log the error for internal review, but provide a generic message to the user
+    error_log("Database error: " . $e->getMessage()); 
+    echo "An error occurred while fetching your orders. Please try again later.";
     exit();
 }
 
